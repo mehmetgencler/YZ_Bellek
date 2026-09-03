@@ -27,14 +27,14 @@ namespace om {
                 auto it = objects_.find(id);
                 if (it != objects_.end()) {
                     // move to hot cache (call while holding graph lock, per ordering)
-                    hot_.put(it->second.obj, [&](std::shared_ptr<const MemoryObject> o){ 
-                        // eviction callback saves to cold; we'll write final with version
-                        try {
-                            cold_.save_with_version(o->id(), *o, it->second.version);
-                            return true;
-                        } catch (...) {
-                            throw;
-                        }
+                    // Use a callback that looks up authoritative version at callback time
+                    hot_.put(it->second.obj, [this](std::shared_ptr<const MemoryObject> o){ 
+                        // Lookup authoritative version from graph's objects_ map
+                        uint64_t authoritative_version = om::DEFAULT_VERSION_FALLBACK;
+                        auto git = this->objects_.find(o->id());
+                        if (git != this->objects_.end()) authoritative_version = git->second.version;
+                        this->cold_.save_with_version(o->id(), *o, authoritative_version);
+                        return true;
                     });
                     return it->second;
                 }
@@ -50,13 +50,12 @@ namespace om {
                     // reindex/owner index
                     owner_index_[loaded->obj->owner()].push_back(id);
                     // Per lock ordering, hot_.put must be called while holding graph mutex
-                    hot_.put(loaded->obj, [&](std::shared_ptr<const MemoryObject> o){
-                        try {
-                            cold_.save_with_version(o->id(), *o, loaded->version);
-                            return true;
-                        } catch (...) {
-                            throw;
-                        }
+                    hot_.put(loaded->obj, [this](std::shared_ptr<const MemoryObject> o){
+                        uint64_t authoritative_version = om::DEFAULT_VERSION_FALLBACK;
+                        auto git = this->objects_.find(o->id());
+                        if (git != this->objects_.end()) authoritative_version = git->second.version;
+                        this->cold_.save_with_version(o->id(), *o, authoritative_version);
+                        return true;
                     });
                 }
                 return loaded;
